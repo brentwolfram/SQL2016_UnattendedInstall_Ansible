@@ -1,0 +1,91 @@
+---
+- name: Initialize disks, set pagefile, apply updates 
+  hosts: windows
+  gather_facts: false
+  connection: local
+
+  tasks:
+  - name: Initialize disk 1 # pagefile S drive 
+    win_shell: Initialize-Disk 1 
+  - name: Initialize disk 2 # SQL binaries D drive
+    win_shell: Initialize-Disk 2
+  - name: Initialize disk 3 # SQL Backup H drive
+    win_shell: Initialize-Disk 3 
+  - name: Initialize disk 4 # SQL TempDB G drive
+    win_shell: Initialize-Disk 4 
+  - name: Initialize disk 5 # SQL Log F drive 
+    win_shell: Initialize-Disk 5 
+  - name: Initialize disk 6 # SQL Data E
+    win_shell: Initialize-Disk 6 
+
+  - name: Online disk 1
+    win_shell: Set-Disk -Number 1 -IsOffline $False
+  - name: Online disk 2 
+    win_shell: Set-Disk -Number 2 -IsOffline $False
+  - name: Online disk 3 
+    win_shell: Set-Disk -Number 3 -IsOffline $False
+  - name: Online disk 4 
+    win_shell: Set-Disk -Number 4 -IsOffline $False
+  - name: Online disk 5 
+    win_shell: Set-Disk -Number 5 -IsOffline $False
+  - name: Online disk 6 
+    win_shell: Set-Disk -Number 6 -IsOffline $False
+
+  - name: Partition disk 1
+    win_shell: New-Partition -DiskNumber 1 -UseMaximumSize -DriveLetter S
+  - name: Partition disk 2 
+    win_shell: New-Partition -DiskNumber 2 -UseMaximumSize -DriveLetter D 
+  - name: Partition disk 3 
+    win_shell: New-Partition -DiskNumber 3 -UseMaximumSize -DriveLetter H 
+  - name: Partition disk 4 
+    win_shell: New-Partition -DiskNumber 4 -UseMaximumSize -DriveLetter G 
+  - name: Partition disk 5 
+    win_shell: New-Partition -DiskNumber 5 -UseMaximumSize -DriveLetter F 
+  - name: Partition disk 6 
+    win_shell: New-Partition -DiskNumber 6 -UseMaximumSize -DriveLetter E 
+
+  - name: Format volume on disk 1
+    win_shell: Format-Volume -DriveLetter S -FileSystem NTFS -NewFileSystemLabel PAGEFILE -Confirm:$false
+  - name: Format volume on disk 2 
+    win_shell: Format-Volume -DriveLetter D -FileSystem NTFS -NewFileSystemLabel SQLBINARY -Confirm:$false
+  - name: Format volume on disk 3 
+    win_shell: Format-Volume -DriveLetter H -FileSystem NTFS -NewFileSystemLabel SQLBACKUP -Confirm:$false
+  - name: Format volume on disk 4 
+    win_shell: Format-Volume -DriveLetter G -FileSystem NTFS -AllocationUnitSize 65536 -NewFileSystemLabel SQLTEMPDB -Confirm:$false
+  - name: Format volume on disk 5 
+    win_shell: Format-Volume -DriveLetter F -FileSystem NTFS -AllocationUnitSize 65536 -NewFileSystemLabel SQLLOG -Confirm:$false
+  - name: Format volume on disk 6 
+    win_shell: Format-Volume -DriveLetter E -FileSystem NTFS -AllocationUnitSize 65536 -NewFileSystemLabel SQLDATA -Confirm:$false
+
+  - name: Set pagefile location to S drive and 8GB
+    win_pagefile:
+      drive: S
+      initial_size: 8000 # set to desired pagefile size
+      maximum_size: 8000 # set to desired pagefile size
+      remove_all: yes
+      automatic: no
+      state: present
+  - name: Remove pagefile on C
+    win_pagefile:
+      drive: C
+      state: absent
+      automatic: no
+      remove_all: yes
+
+  - name: Apply PVSCSI tuning settings for OSI running on ESXi (VMware KB2053145)
+    win_regedit:
+      path: HKLM:\SYSTEM\CurrentControlSet\services\pvscsi\Parameters\Device
+      name: DriveParameter
+      type: string
+      data: 'RequestRingPages=32,MaxQueueDepth=254' 
+
+  - name: Install all security, critical, and rollup updates # make sure you keep your templates current, otherwise these take forever or sometimes fail, thanks MSFT
+    win_updates:
+      category_names:
+        - SecurityUpdates
+        - CriticalUpdates
+        - UpdateRollups
+      reboot: no
+
+  - name: Reboot after pagefile and registry changes
+    win_reboot:

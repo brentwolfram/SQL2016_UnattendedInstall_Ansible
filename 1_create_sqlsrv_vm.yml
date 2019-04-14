@@ -1,0 +1,181 @@
+---
+- name: Create Windows Server 2016 VM for SQL Server 2016 using best practices (eg. separate pvscsi controllers for tempdb, data and log) 
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+# Gather basic info from cmdline to build the VM for testing, obviously better to pass in variables
+
+  vars_prompt:
+    - name: vcenter_user
+      prompt: "vCenter Username?"
+      private: no
+
+    - name: vcenter_pass
+      prompt: "vCenter Password?"
+      private: yes
+
+    - name: vm_name
+      prompt: "Name for new VM?"
+      private: no
+
+    - name: ip_addr
+      prompt: "IP Address for new VM?"
+      private: no
+
+    - name: domain_user
+      prompt: "Enter Domain Admin account?" 
+      private: no
+
+    - name: domain_pass
+      prompt: "Enter Domain Admin password?"
+      private: yes
+
+    - name: tempdb_size
+      prompt: "Enter size of TempDB disk in GB"
+      private: no
+
+    - name: sqllog_size
+      prompt: "Enter size of SQL Log disk in GB"
+      private: no
+
+    - name: sqldata_size
+      prompt: "Enter size of SQL data disk in GB"
+      private: no
+
+    - name: sqlbkp_size
+      prompt: "Enter size of SQL backup disk in GB"
+      private: no
+
+  tasks:
+  - name: Create a VM from a template
+    vmware_guest:
+      hostname: < vCenter hostname or IP > # replace with your vCenter info
+      username: '{{ vcenter_user }}'
+      password: '{{ vcenter_pass }}'
+      validate_certs: no
+      datacenter: < your ESXi data center name > # replace with your datacenter name from vCenter
+      cluster: < your ESXi cluster name > # replace with your desired ESXi cluster location
+      folder: </folder name for new VM> # the folder you want to place the VM
+      name: '{{ vm_name }}' 
+      state: poweredon
+      guest_id: windows9Server64Guest
+      template: BW-win2k16-sql16-template # replace with your sysprep'd VM template
+      disk:
+      - size_gb: 80 # OS drive, should match template
+        type: thin
+        datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+      - size_gb: 8 # Pagefile, change to desired or provide via variable/cmdline
+        type: thin
+        datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+      - size_gb: 100 # SQL Binaries, change to desired or provide via variable/cmdline
+        type: thin
+        datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+      - size_gb: '{{ sqlbkp_size }}' # SQL backup and exports
+        type: thin
+        datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+      hardware:
+        memory_mb: < memory size > # replace with your memory size name or provide via variable/cmdline
+        num_cpus: < CPU count > # replace with desired CPU count or provide via variable/cmdline
+        num_cpu_cores_per_socket: 1 
+        scsi: paravirtual
+        version: 11
+      networks:
+      - name: < port-group > # replace with your desired port-group or provide via variable/cmdline
+        ip: '{{ ip_addr }}'
+        netmask: < netmask > # replace with your desired netmask or provide via variable/cmdline (or integrate into IPAM)
+        gateway: < gateway > # replace with your desired gateway or provide via variable/cmdline (or integrate into IPAM)
+        type: static
+        domain: < domain name > # replace with your domain name
+        dns_servers:
+        - < DNS Server 1 > # replace with your desired primary DNS server or provide via variable/cmdline (or integrate into IPAM)
+        - < DNS Server 2 > # replace with your desired secondary DNS server or provide via variable/cmdline (or integrate into IPAM)
+      customization:
+        autologon: yes
+        domainadmin: '{{ domain_user }}'
+        domainadminpassword: '{{ domain_pass }}' 
+        dns_suffix: < domain name > # replace with your domain name
+        fullname: < First Name > # replace with desired
+        joindomain: < AD domain > # replace with your desired AD domain or provide via variable/cmdline
+        orgname: < org name > # replace with desired
+        password: < password > # replace with your password info
+        hostname: '{{ vm_name }}' 
+        domain: < domain name > # replace with your domain name
+        dns_servers:
+        - < DNS Server 1 > # replace with your desired primary DNS server or provide via variable/cmdline (or integrate into IPAM)
+        - < DNS Server 2 > # replace with your desired secondary DNS server or provide via variable/cmdline (or integrate into IPAM)
+        runonce:
+        - powershell.exe -ExecutionPolicy Unrestricted -File C:\Windows\Temp\ConfigureRemotingForAnsible.ps1 -ForceNewSSLCert -EnableCredSSP # basic WinRM setup, needs to be hardened
+        - powershell.exe Set-NetFirewallProfile -Profile Domain -Enabled False # disable firewall for now when on domain
+      wait_for_ip_address: yes
+
+  - name: Pause for unattended install
+    pause:
+      minutes: 5
+
+  - name: Power off virtual machine before adding SQL disks
+    vmware_guest_powerstate:
+      hostname: < vCenter hostname or IP > # replace with your vCenter info
+      port: 443
+      username: '{{ vcenter_user }}'
+      password: '{{ vcenter_pass }}'
+      validate_certs: no
+      name: '{{ vm_name }}'
+      folder: </folder name for new VM> # the folder you want to place the VM
+      state: shutdown-guest
+      state_change_timeout: 200
+    delegate_to: localhost
+    register: deploy
+
+  - name: Pause for VM shutdown
+    pause:
+      minutes: 2
+
+  - name: Add SQL disks and additional PVSCSI controllers # using module written by Abhijeet Kasurde (@akasurde) <akasurde@redhat.com>, but I changed disks to be independent-persistent in the module (VADP backups on high IO drives = bad)
+    vmware_guest_disk:
+      hostname: < vCenter hostname or IP > # replace with your vCenter info
+      port: 443
+      username: '{{ vcenter_user }}'
+      password: '{{ vcenter_pass }}'
+      datacenter: < your ESXi data center name > # replace with your datacenter name from vCenter
+      validate_certs: no
+      name: '{{ vm_name }}'
+      folder: </folder name for new VM> # the folder you want to place the VM
+      disk:
+        - size_gb: '{{ tempdb_size }}' # TempDB
+          type: thin
+          datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+          state: present
+          scsi_controller: 1
+          unit_number: 0
+          scsi_type: 'paravirtual'
+        - size_gb: '{{ sqllog_size }}' # SQL log
+          type: thin
+          datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+          state: present
+          scsi_controller: 2
+          unit_number: 0
+          scsi_type: 'paravirtual'
+        - size_gb: '{{ sqldata_size }}' # SQL Data
+          type: thin
+          datastore: < your data store name > # replace with your datastore name or provide via variable/cmdline
+          state: present
+          scsi_controller: 3
+          unit_number: 0
+          scsi_type: 'paravirtual'
+    delegate_to: localhost
+    register: disk_facts
+
+  - name: Power on virtual machine before adding SQL disks
+    vmware_guest_powerstate:
+      hostname: < vCenter hostname or IP > # replace with your vCenter info
+      port: 443
+      username: '{{ vcenter_user }}'
+      password: '{{ vcenter_pass }}'
+      validate_certs: no
+      name: '{{ vm_name }}'
+      folder: </folder name for new VM> # the folder you want to place the VM
+      state: powered-on
+    delegate_to: localhost
+    register: deploy
+

@@ -1,0 +1,28 @@
+---
+- name: Launch unattended install of SQL Server 2016
+  hosts: windows
+  gather_facts: false
+  connection: local
+
+  vars_prompt:
+    - name: domain_user
+      prompt: "Enter Domain Admin account?" 
+      private: no
+
+    - name: domain_pass
+      prompt: "Enter Domain Admin password?"
+      private: yes
+
+  tasks:
+  - name: Download configuration.ini file for unattended SQL Server install # I kept the unattended install configuration INI on an internal website for simplicity
+    win_get_url:
+      url: http://<your URL path here>/myconfiguration.ini # replace with your URL path
+      dest: D:\myconfiguration.ini # the format of this file is straightforward, but dependent on what you need installed and your license entitlement, refer to MSFT docs
+
+  - name: Start unattended install of SQL Server # be patient, it can take time, also make sure credentials in the INI file are working
+    win_shell: z:\setup.exe /ConfigurationFile="D:\myconfiguration.ini"
+    vars:
+      ansible_become: yes
+      ansible_become_method: runas
+      ansible_become_user: '{{ domain_user }}'
+      ansible_become_pass: '{{ domain_pass }}'
